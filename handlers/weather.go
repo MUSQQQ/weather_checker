@@ -4,18 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
-	"strconv"
 
-	"github.com/pkg/errors"
 	"github.com/valyala/fasthttp"
 )
 
-const geocodeURL = "https://geocode.xyz/?json=1&scantext="
+/*
+TODO
+dodac wysylanie jsona w response body przy odpytywaniu /coordinates/:cityname
+nastepnie dodac obsluge odpytywnaia o pogode
+*/
 
-// "/weather/:cityname"
-func Weatherhandler(ctx *fasthttp.RequestCtx) {
-	lon, lat, status, err := getCoordinates(fmt.Sprintf("%s", ctx.UserValue("cityname")))
+const openWeatherURL = "https://api.openweathermap.org/data/2.5/onecall"
+
+// "/coordinates/:cityname"
+func WeatherHandler(ctx *fasthttp.RequestCtx) {
+	lon, lat, status, err := getCoordinatesAsString(fmt.Sprintf("%s", ctx.UserValue("cityname")))
 	if err != nil {
 		log.Printf("error occured while trying to get coordinates: %s", err)
 		return
@@ -24,76 +27,101 @@ func Weatherhandler(ctx *fasthttp.RequestCtx) {
 		fmt.Fprintf(ctx, "Unfortunately, geocode services are unavailable at the moment. Please try again later.")
 		return
 	}
-	if lat == -1 && lon == -1 {
+	if lat == "" && lon == "" {
 		fmt.Fprintf(ctx, "Geocode service got too many requests and have not processed your search. Please try again.")
 		return
 	}
 
-	fmt.Fprintf(ctx, "Coordinates of the looked up city:\n")
-	fmt.Fprintf(ctx, "lat: %f, lon: %f", lat, lon)
+	ctx.Response.Header.Add("Content-Type", "application-json")
+
+	///udane zwracanie latt i longt w formie prawilnego jsona
+	jsonMap := make(map[string]json.RawMessage)
+	jsonMap["latt"] = []byte(lat)
+	jsonMap["longt"] = []byte(lon)
+
+	a, err := json.Marshal(jsonMap)
+	if err != nil {
+		fmt.Fprintf(ctx, "marshaling error")
+	}
+	ctx.Response.SetBody(a)
+
 }
 
-func getCoordinates(searchText string) (lat float32, lon float32, status int, err error) {
+func getCoordinatesAsString(searchText string) (lat string, lon string, status int, err error) {
 	var geocodingRequest []byte
 	URI := geocodeURL + searchText
+
 	status, geocodingRequest, err = fasthttp.Get(geocodingRequest, URI)
+
 	if err != nil {
-		errors.Errorf("error while requesting coordinates from geocoding")
-		return -1, -1, status, err
+		log.Printf("error while requesting coordinates from geocoding")
+		return "", "", status, err
 	}
 	if status >= 500 {
 		log.Printf("geocode service unvailable")
-		return -1, -1, status, nil
+		return "", "", status, nil
 	}
 	if status != 200 {
-		errors.Errorf("status not OK in geocoding response")
-		return -1, -1, status, nil
+		log.Printf("status not OK in geocoding response")
+		return "", "", status, nil
 	}
 
 	c := make(map[string]json.RawMessage)
 
 	err = json.Unmarshal(geocodingRequest, &c)
 	if err != nil {
-		errors.Errorf("error while unmarshaling request")
-		return -1, -1, status, err
+		log.Printf("error while unmarshaling request")
+		return "", "", status, err
 	}
 
-	longt, err := byteArrayToFloat(c["longt"])
-	if err != nil {
-		log.Printf("error while converting coordinates to float: %s", err)
-		return -1, -1, status, err
-	}
-	latt, err := byteArrayToFloat(c["latt"])
-	if err != nil {
-		log.Printf("error while converting coordinates to float: %s", err)
-		return -1, -1, status, err
-	}
+	longt := string(c["longt"])
+	latt := string(c["latt"])
 
 	return longt, latt, 200, nil
 }
 
-func byteArrayToFloat(bytes []byte) (result float32, err error) {
-	strByte := string(bytes)
-	var i int
-	for i = 0; i < len(strByte); i++ {
-		if strByte[i] == '.' {
-			break
-		}
+// /weather/checkcity/:cityname
+func MainWeatherHandler(ctx *fasthttp.RequestCtx) {
+	//https://api.weather.gov/points/
+
+	longt, latt, status, err := getCoordinatesAsFloat(fmt.Sprintf("%s", ctx.UserValue("cityname")))
+	if err != nil {
+		log.Printf("error occured while trying to get coordinates: %s", err)
+		return
+	}
+	if status >= 500 {
+		fmt.Fprintf(ctx, "Unfortunately, geocode services are unavailable at the moment. Please try again later.")
+		return
+	}
+	if latt == 500 && longt == 500 {
+		fmt.Fprintf(ctx, "Geocode service got too many requests and have not processed your search. Please try again.")
+		return
+	}
+	request := ctx.Request
+	request.Header.Add("User-Agent", "golang weather_checker app")
+
+	toExclude := "minutely,hourly,daily,alerts"
+	var openWeatherRequest []byte
+	URI := fmt.Sprintf("%s?lat=%f&lon=%f&exclude=%s&appid=%s", openWeatherURL, latt, longt, toExclude, openWeatherAPIKey)
+
+	status, openWeatherRequest, err = fasthttp.Get(openWeatherRequest, URI)
+
+	if err != nil {
+		log.Printf("error while requesting coordinates from geocoding")
+		fmt.Fprintf(ctx, "Our server encountered problem while trying to get weather data")
+		return
+	}
+	if status >= 500 {
+		log.Printf("geocode service unvailable")
+		fmt.Fprintf(ctx, "Unfortunately, openweather services are unavailable at the moment. Please try again later.")
+		return
+	}
+	if status != 200 {
+		log.Printf("status not OK in geocoding response")
+		fmt.Fprintf(ctx, "Looked up term probably cannot be recognized")
+		return
 	}
 
-	fmt.Println(strByte[1:i])
-	fmt.Println(strByte[i+1 : len(strByte)-1])
-	intResultPart, err := strconv.Atoi(strByte[1:i])
-	if err != nil {
-		log.Printf("error while converting: %s", err)
-		return -1, err
-	}
-	mantissaPart, err := strconv.Atoi(strByte[i+1 : len(strByte)-1])
-	if err != nil {
-		log.Printf("error while converting: %s", err)
-		return -1, err
-	}
-	result = float32(intResultPart) + float32(mantissaPart)/(float32(math.Pow10(i+2)))
-	fmt.Println(result)
-	return result, nil
+	fmt.Fprint(ctx, string(openWeatherRequest))
+
 }
