@@ -4,15 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
-
-/*
-TODO
-dodac wysylanie jsona w response body przy odpytywaniu /coordinates/:cityname
-nastepnie dodac obsluge odpytywnaia o pogode
-*/
 
 const openWeatherURL = "https://api.openweathermap.org/data/2.5/onecall"
 
@@ -34,7 +29,6 @@ func WeatherHandler(ctx *fasthttp.RequestCtx) {
 
 	ctx.Response.Header.Add("Content-Type", "application-json")
 
-	///udane zwracanie latt i longt w formie prawilnego jsona
 	jsonMap := make(map[string]json.RawMessage)
 	jsonMap["latt"] = []byte(lat)
 	jsonMap["longt"] = []byte(lon)
@@ -97,31 +91,88 @@ func MainWeatherHandler(ctx *fasthttp.RequestCtx) {
 		fmt.Fprintf(ctx, "Geocode service got too many requests and have not processed your search. Please try again.")
 		return
 	}
-	request := ctx.Request
-	request.Header.Add("User-Agent", "golang weather_checker app")
+	//request := ctx.Request
+	//request.Header.Add("User-Agent", "golang weather_checker app")
 
+	temp, pressure, humidity, sunrise, sunset, status, err := getWeatherData(latt, longt)
+	if err != nil {
+		fmt.Fprintf(ctx, "We could not process your request due to unidentified issues")
+		return
+	}
+	if status >= 500 {
+		fmt.Fprintf(ctx, "Openweather service is unavailable. Try again later.")
+		return
+	}
+	if status != 200 {
+		fmt.Fprintf(ctx, "Openweather could not process our request")
+		return
+	}
+
+	temp -= 272.15 //convert to Celsius
+
+	clientSunrise := time.Unix(sunrise, 0)
+	clientSunset := time.Unix(sunset, 0)
+
+	fmt.Fprintf(ctx, "Weather data for coordinates: %f, %f\n", latt, longt)
+	fmt.Fprintf(ctx, "temp: %f, pressure: %f, humidity: %f, sunrise: %s, sunset: %s", temp, pressure, humidity, clientSunrise, clientSunset)
+}
+
+func getWeatherData(lat float32, lon float32) (temp float32, pressure float32, humidity float32, sunrise int64, sunset int64, status int, err error) {
 	toExclude := "minutely,hourly,daily,alerts"
 	var openWeatherRequest []byte
-	URI := fmt.Sprintf("%s?lat=%f&lon=%f&exclude=%s&appid=%s", openWeatherURL, latt, longt, toExclude, openWeatherAPIKey)
+	URI := fmt.Sprintf("%s?lat=%f&lon=%f&exclude=%s&appid=%s", openWeatherURL, lat, lon, toExclude, openWeatherAPIKey)
 
 	status, openWeatherRequest, err = fasthttp.Get(openWeatherRequest, URI)
 
 	if err != nil {
 		log.Printf("error while requesting coordinates from geocoding")
-		fmt.Fprintf(ctx, "Our server encountered problem while trying to get weather data")
-		return
-	}
-	if status >= 500 {
-		log.Printf("geocode service unvailable")
-		fmt.Fprintf(ctx, "Unfortunately, openweather services are unavailable at the moment. Please try again later.")
-		return
+		return 0, 0, 0, 0, 0, 500, err
 	}
 	if status != 200 {
-		log.Printf("status not OK in geocoding response")
-		fmt.Fprintf(ctx, "Looked up term probably cannot be recognized")
-		return
+		log.Printf("openweather service unvailable or wrong request")
+		return 0, 0, 0, 0, 0, status, nil
+	}
+	unmarshaledMap1 := make(map[string]json.RawMessage)
+
+	err = json.Unmarshal(openWeatherRequest, &unmarshaledMap1)
+	if err != nil {
+		log.Printf("error while unmarshaling request")
+		return 0, 0, 0, 0, 0, 590, err
+	}
+	unmarshaledMap2 := make(map[string]json.RawMessage)
+
+	err = json.Unmarshal(unmarshaledMap1["current"], &unmarshaledMap2)
+	if err != nil {
+		log.Printf("error while unmarshaling request")
+		return 0, 0, 0, 0, 0, 590, err
 	}
 
-	fmt.Fprint(ctx, string(openWeatherRequest))
+	temp, err = byteArrayToFloat(unmarshaledMap2["temp"])
+	if err != nil {
+		log.Printf("error while converting coordinates to float: %s", err)
+		return 0, 0, 0, 0, 0, status, err
+	}
 
+	pressure, err = byteArrayToFloat(unmarshaledMap2["pressure"])
+	if err != nil {
+		log.Printf("error while converting coordinates to float: %s", err)
+		return 0, 0, 0, 0, 0, status, err
+	}
+	humidity, err = byteArrayToFloat(unmarshaledMap2["humidity"])
+	if err != nil {
+		log.Printf("error while converting coordinates to float: %s", err)
+		return 0, 0, 0, 0, 0, status, err
+	}
+	err = json.Unmarshal(unmarshaledMap2["sunrise"], &sunrise)
+	if err != nil {
+		log.Printf("error while unmarshaling request")
+		return 0, 0, 0, 0, 0, 590, err
+	}
+	err = json.Unmarshal(unmarshaledMap2["sunset"], &sunset)
+	if err != nil {
+		log.Printf("error while unmarshaling request")
+		return 0, 0, 0, 0, 0, 590, err
+	}
+
+	return temp, pressure, humidity, sunrise, sunset, status, nil
 }

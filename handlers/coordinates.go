@@ -63,20 +63,20 @@ func getCoordinatesAsFloat(searchText string) (lat float32, lon float32, status 
 		return 500, 500, status, nil
 	}
 
-	c := make(map[string]json.RawMessage)
+	unmarshaledMap := make(map[string]json.RawMessage)
 
-	err = json.Unmarshal(geocodingRequest, &c)
+	err = json.Unmarshal(geocodingRequest, &unmarshaledMap)
 	if err != nil {
 		log.Printf("error while unmarshaling request")
 		return 500, 500, status, err
 	}
 
-	longt, err := byteArrayToFloat(c["longt"])
+	longt, err := byteArrayToFloat(unmarshaledMap["longt"][1:])
 	if err != nil {
 		log.Printf("error while converting coordinates to float: %s", err)
 		return 500, 500, status, err
 	}
-	latt, err := byteArrayToFloat(c["latt"])
+	latt, err := byteArrayToFloat(unmarshaledMap["latt"][1:])
 	if err != nil {
 		log.Printf("error while converting coordinates to float: %s", err)
 		return 500, 500, status, err
@@ -87,6 +87,7 @@ func getCoordinatesAsFloat(searchText string) (lat float32, lon float32, status 
 
 func byteArrayToFloat(bytes []byte) (result float32, err error) {
 	strByte := string(bytes)
+	fmt.Println(strByte)
 	var i int
 	for i = 0; i < len(strByte); i++ {
 		if strByte[i] == '.' {
@@ -94,12 +95,23 @@ func byteArrayToFloat(bytes []byte) (result float32, err error) {
 		}
 	}
 
-	intResultPart, err := strconv.Atoi(strByte[1:i])
+	var intResultPart int
+
+	intResultPart, err = strconv.Atoi(strByte[0:i])
+
 	if err != nil {
 		log.Printf("error while converting: %s", err)
 		return -1, err
 	}
-	mantissaPart, err := strconv.Atoi(strByte[i+1 : len(strByte)-1])
+
+	var mantissaPart int
+	if i >= len(strByte)-1 {
+		mantissaPart = 0
+
+	} else {
+		mantissaPart, err = strconv.Atoi(strByte[i+1 : len(strByte)-1])
+	}
+
 	if err != nil {
 		log.Printf("error while converting: %s", err)
 		return -1, err
